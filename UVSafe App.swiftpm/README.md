@@ -78,7 +78,7 @@ UVSafe App.swiftpm/
 ## Author
 
 **Aviral Singh**  
-Swift Student Challenge 2025 Submission
+Swift Student Challenge 2026 Submission
 
 ---
 
