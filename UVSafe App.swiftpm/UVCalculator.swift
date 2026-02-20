@@ -151,7 +151,6 @@ struct UVCalculator {
         latitude: Double,            // degrees
         longitude: Double,           // degrees
         date: Date,
-        altitude: Double,            // metres (above sea level)
         aqiPollution: Double,        // Air Quality Index (0–500)
         cloudCondition: CloudCondition,
         skinType: SkinType,
@@ -236,11 +235,8 @@ struct UVCalculator {
         // 6b. Cloud correction (empirical attenuation factors)
         let cloudFactor = cloudCondition.transmissionFactor
 
-        // 6c. Altitude correction: UV increases ~10% per 1000 m due to thinner atmosphere
-        let altitudeFactor = 1.0 + 0.1 * (altitude / 1000.0)
-
         // Combined transmission
-        let totalTransmission = ozoneFactor * pollutionFactor * cloudFactor * altitudeFactor
+        let totalTransmission = ozoneFactor * pollutionFactor * cloudFactor
 
         // ── 7. UV Power & UV Index ───────────────────────────────────────────
         // UV irradiance at surface (W/m² erythemally weighted):

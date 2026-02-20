@@ -3,6 +3,7 @@ import SwiftUI
 /// The main result display with animated UV gauge, risk badge, and burn time card.
 struct UVResultView: View {
     @ObservedObject var vm: UVViewModel
+    @EnvironmentObject var settings: AccessibilitySettings
     @State private var appeared = false
 
     var result: UVResult? { vm.uvResult }
@@ -12,14 +13,14 @@ struct UVResultView: View {
         VStack(spacing: 20) {
 
             // ── Gauge Ring ──────────────────────────────────────────────────
-            GaugeSection(vm: vm, appeared: appeared)
+            GaugeSection(vm: vm, appeared: appeared, colorBlind: settings.colorBlindMode)
 
             // ── Risk Badge ─────────────────────────────────────────────────
-            RiskBadge(risk: risk)
+            RiskBadge(risk: risk, colorBlind: settings.colorBlindMode)
                 .transition(.scale.combined(with: .opacity))
 
             // ── Stats Row ─────────────────────────────────────────────────
-            StatsRow(vm: vm, result: result)
+            StatsRow(vm: vm, result: result, colorBlind: settings.colorBlindMode)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
 
             // ── Burn Time Card ────────────────────────────────────────────
@@ -43,6 +44,7 @@ struct UVResultView: View {
 private struct GaugeSection: View {
     @ObservedObject var vm: UVViewModel
     let appeared: Bool
+    let colorBlind: Bool
 
     var result: UVResult? { vm.uvResult }
     var risk: UVRiskCategory { result?.riskCategory ?? .none }
@@ -68,7 +70,8 @@ private struct GaugeSection: View {
                 // Gauge
                 UVGaugeRing(
                     uvIndex: max(result?.uvIndex ?? 0, 0),
-                    riskColor: risk.swiftUIColor
+                    riskColor: risk.adaptiveColor(colorBlind: colorBlind),
+                    colorBlind: colorBlind
                 )
                 .scaleEffect(appeared ? 1.0 : 0.7)
                 .opacity(appeared ? 1.0 : 0)
@@ -93,13 +96,15 @@ private struct GaugeSection: View {
 
 private struct RiskBadge: View {
     let risk: UVRiskCategory
+    let colorBlind: Bool
 
     var body: some View {
+        let color = risk.adaptiveColor(colorBlind: colorBlind)
         HStack(spacing: 10) {
             Circle()
-                .fill(risk.swiftUIColor)
+                .fill(color)
                 .frame(width: 10, height: 10)
-                .shadow(color: risk.swiftUIColor.opacity(0.8), radius: 6)
+                .shadow(color: color.opacity(0.8), radius: 6)
 
             Text(risk.rawValue.uppercased())
                 .font(.system(size: 16, weight: .black, design: .rounded))
@@ -108,8 +113,8 @@ private struct RiskBadge: View {
         }
         .padding(.horizontal, 24)
         .padding(.vertical, 10)
-        .background(risk.swiftUIColor.opacity(0.25), in: Capsule())
-        .overlay(Capsule().stroke(risk.swiftUIColor.opacity(0.55), lineWidth: 1.5))
+        .background(color.opacity(0.25), in: Capsule())
+        .overlay(Capsule().stroke(color.opacity(0.55), lineWidth: 1.5))
         .animation(.easeInOut(duration: 0.5), value: risk.rawValue)
     }
 }
@@ -119,6 +124,7 @@ private struct RiskBadge: View {
 private struct StatsRow: View {
     @ObservedObject var vm: UVViewModel
     let result: UVResult?
+    let colorBlind: Bool
 
     var body: some View {
         HStack(spacing: 12) {
@@ -126,13 +132,7 @@ private struct StatsRow: View {
                 icon: "sun.max.fill",
                 label: "UV Index",
                 value: result.map { String(format: "%.1f", max($0.uvIndex, 0)) } ?? "—",
-                color: result?.riskCategory.swiftUIColor ?? .uvNone
-            )
-            StatPill(
-                icon: "mountain.2.fill",
-                label: "Altitude",
-                value: String(format: "%.0f m", vm.locationManager.altitude),
-                color: .cyan
+                color: (result?.riskCategory ?? .none).adaptiveColor(colorBlind: colorBlind)
             )
             StatPill(
                 icon: "wind",
@@ -229,7 +229,7 @@ private struct BurnTimeCard: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
                     Spacer()
-                    if vm.sunscreenSPF > 1.5 {
+                    if vm.sunscreenSPF >= 1 {
                         Label("SPF \(Int(vm.sunscreenSPF))", systemImage: "shield.fill")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(.cyan)
@@ -239,6 +239,121 @@ private struct BurnTimeCard: View {
                             .foregroundStyle(.orange)
                     }
                 }
+
+                // ── Reminder button ─────────────────────────────────────────
+                if let r = result, !r.isSunBelowHorizon, r.uvPowerWattsPerM2 > 0 {
+                    Divider().background(Color.white.opacity(0.15))
+                    ReminderButton(vm: vm, result: r)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Reminder Button
+
+private struct ReminderButton: View {
+    @ObservedObject var vm: UVViewModel
+    let result: UVResult
+
+    @ObservedObject private var nm = NotificationManager.shared
+    @State private var isScheduling = false
+    @State private var showDeniedAlert = false
+
+    private var hasActiveReminder: Bool { nm.pendingReminder != nil }
+
+    private func countdownText(now: Date) -> String {
+        guard let fireDate = nm.pendingReminder else { return "" }
+        let secs = max(0, fireDate.timeIntervalSince(now))
+        if secs >= 3600 {
+            return String(format: "%.0fh %.0fm left", floor(secs / 3600), (secs.truncatingRemainder(dividingBy: 3600)) / 60)
+        }
+        return String(format: "%.0f min left", ceil(secs / 60))
+    }
+
+    var body: some View {
+        if hasActiveReminder {
+            // ── Active state: countdown + cancel ───────────────────────────
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                HStack(spacing: 10) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Reminder set")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.orange)
+                        Text(countdownText(now: context.date))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.labelSecondary)
+                    }
+                    Spacer()
+                    Button {
+                        withAnimation(.spring(response: 0.35)) {
+                            nm.cancel()
+                        }
+                    } label: {
+                        Label("Cancel", systemImage: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+
+        } else {
+            // ── Idle state: "Going outside now?" button ─────────────────────
+            Button {
+                Task {
+                    isScheduling = true
+                    await nm.scheduleReminder(
+                        burnSeconds: result.burnTimeWithSPFSeconds,
+                        skinTypeName: vm.skinType.shortName,
+                        spf: vm.sunscreenSPF
+                    )
+                    if nm.authStatus == .denied { showDeniedAlert = true }
+                    isScheduling = false
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isScheduling {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                            .scaleEffect(0.75)
+                            .tint(.white)
+                    } else {
+                        Image(systemName: "bell.badge.fill")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    Text(isScheduling ? "Setting reminder…" : "Going outside now?")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color(hex: "#F97316"), Color(hex: "#DC2626")],
+                        startPoint: .leading, endPoint: .trailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 14)
+                )
+                .shadow(color: Color(hex: "#F97316").opacity(0.45), radius: 8, y: 4)
+            }
+            .buttonStyle(.plain)
+            .disabled(isScheduling)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .alert("Notifications Disabled", isPresented: $showDeniedAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Enable notifications in Settings → UVSafe to receive sunburn reminders.")
             }
         }
     }

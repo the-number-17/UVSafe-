@@ -12,7 +12,7 @@ final class UVViewModel: ObservableObject {
     @Published var aqiPollution: Double = 50          // Air Quality Index
     @Published var cloudCondition: CloudCondition = .clear
     @Published var skinType: SkinType = .typeII
-    @Published var sunscreenSPF: Double = 1.0         // 1 = no sunscreen
+    @Published var sunscreenSPF: Double = 0.0         // 0 = no sunscreen
 
     // MARK: - Published Outputs
     @Published var uvResult: UVResult? = nil
@@ -20,6 +20,9 @@ final class UVViewModel: ObservableObject {
 
     // MARK: - Location
     let locationManager = LocationManager()
+
+    // MARK: - Notifications
+    let notificationManager = NotificationManager.shared
 
     // MARK: - Private
     private var cancellables = Set<AnyCancellable>()
@@ -48,7 +51,7 @@ final class UVViewModel: ObservableObject {
             .store(in: &cancellables)
 
         locationManager.$latitude
-            .combineLatest(locationManager.$longitude, locationManager.$altitude)
+            .combineLatest(locationManager.$longitude)
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] _ in self?.calculate() }
             .store(in: &cancellables)
@@ -62,7 +65,6 @@ final class UVViewModel: ObservableObject {
         isCalculating = true
         let lat  = locationManager.latitude
         let lon  = locationManager.longitude
-        let alt  = locationManager.altitude
         let date = selectedDate
         let aqi  = aqiPollution
         let cloud = cloudCondition
@@ -75,7 +77,6 @@ final class UVViewModel: ObservableObject {
                 latitude: lat,
                 longitude: lon,
                 date: date,
-                altitude: alt,
                 aqiPollution: aqi,
                 cloudCondition: cloud,
                 skinType: skin,
@@ -123,7 +124,7 @@ final class UVViewModel: ObservableObject {
 
     var locationText: String {
         if locationManager.hasLocation {
-            return String(format: "%.4f°, %.4f°  •  %.0f m", locationManager.latitude, locationManager.longitude, locationManager.altitude)
+            return String(format: "%.4f°, %.4f°", locationManager.latitude, locationManager.longitude)
         }
         return "Acquiring location…"
     }

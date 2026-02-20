@@ -84,16 +84,16 @@ struct UVInputView: View {
                         label: "SPF Factor",
                         icon: "shield.lefthalf.filled",
                         value: $vm.sunscreenSPF,
-                        range: 1...100,
+                        range: 0...120,
                         step: 1,
                         unit: "SPF"
                     )
                     HStack {
-                        Text(vm.sunscreenSPF <= 1.5 ? "No sunscreen" : spfLabel(vm.sunscreenSPF))
+                        Text(vm.sunscreenSPF < 1 ? "No sunscreen" : spfLabel(vm.sunscreenSPF))
                             .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(vm.sunscreenSPF <= 1.5 ? Color.uvHigh : Color.uvLow)
+                            .foregroundStyle(vm.sunscreenSPF < 1 ? Color.uvHigh : Color.uvLow)
                         Spacer()
-                        Text("1 = no protection • 50 = SPF 50")
+                        Text("0 = no protection • 50 = SPF 50")
                             .font(.system(size: 11))
                             .foregroundStyle(Color.labelTertiary)
                     }
@@ -116,6 +116,7 @@ struct UVInputView: View {
 
 private struct AQIHint: View {
     let aqi: Double
+    @EnvironmentObject var settings: AccessibilitySettings
 
     var label: String {
         switch aqi {
@@ -127,12 +128,14 @@ private struct AQIHint: View {
         default:        return "Hazardous"
         }
     }
+
     var color: Color {
+        let cb = settings.colorBlindMode
         switch aqi {
-        case 0..<51:   return .uvLow
-        case 51..<101: return .uvModerate
-        case 101..<151: return .uvHigh
-        default:        return .uvVeryHigh
+        case 0..<51:   return cb ? .cbLow      : .uvLow
+        case 51..<101: return cb ? .cbModerate  : .uvModerate
+        case 101..<151: return cb ? .cbHigh     : .uvHigh
+        default:        return cb ? .cbVeryHigh : .uvVeryHigh
         }
     }
 

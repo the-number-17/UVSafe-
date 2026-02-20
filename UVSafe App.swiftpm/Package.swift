@@ -8,20 +8,20 @@ import PackageDescription
 import AppleProductTypes
 
 let package = Package(
-    name: "UVSafe App",
+    name: "UVSafe ",
     platforms: [
         .iOS("16.0")
     ],
     products: [
         .iOSApplication(
-            name: "UVSafe App",
+            name: "UVSafe ",
             targets: ["AppModule"],
             bundleIdentifier: "Personal.UVSafe-App",
             teamIdentifier: "TN7G2K86YY",
             displayVersion: "1.0",
             bundleVersion: "1",
-            appIcon: .placeholder(icon: .sun),
-            accentColor: .presetColor(.cyan),
+            appIcon: .asset("AppIcon"),
+            accentColor: .presetColor(.yellow),
             supportedDeviceFamilies: [
                 .pad,
                 .phone
@@ -32,6 +32,7 @@ let package = Package(
                 .landscapeLeft,
                 .portraitUpsideDown(.when(deviceFamilies: [.pad]))
             ],
+            appCategory: .healthcareFitness,
             additionalInfoPlistContentFilePath: "Info.plist"
         )
     ],
@@ -41,5 +42,5 @@ let package = Package(
             path: "."
         )
     ],
-    swiftLanguageVersions: [.v6]
+    swiftLanguageVersions: [.version("6")]
 )

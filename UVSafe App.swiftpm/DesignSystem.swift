@@ -3,12 +3,22 @@ import SwiftUI
 // MARK: - UV Risk Color Palette
 
 extension Color {
+    // MARK: - Standard UV palette
     static let uvNone     = Color(hex: "#6B7280")
     static let uvLow      = Color(hex: "#22C55E")
     static let uvModerate = Color(hex: "#EAB308")
     static let uvHigh     = Color(hex: "#F97316")
     static let uvVeryHigh = Color(hex: "#EF4444")
     static let uvExtreme  = Color(hex: "#8B5CF6")
+
+    // MARK: - Okabe-Ito colorblind-safe UV palette
+    // Designed for deuteranopia / protanopia (red-green colorblindness)
+    static let cbNone     = Color(hex: "#6B7280")  // grey — unchanged
+    static let cbLow      = Color(hex: "#56B4E9")  // sky blue  (was green)
+    static let cbModerate = Color(hex: "#F0E442")  // yellow    (unchanged)
+    static let cbHigh     = Color(hex: "#E69F00")  // amber/orange
+    static let cbVeryHigh = Color(hex: "#D55E00")  // vermillion
+    static let cbExtreme  = Color(hex: "#CC79A7")  // reddish-purple
 
     static let cardBackground   = Color.white.opacity(0.10)
     static let cardStroke       = Color.white.opacity(0.18)
@@ -38,6 +48,7 @@ extension Color {
 // MARK: - Risk Color helper
 
 extension UVRiskCategory {
+    /// Standard colour used in normal mode.
     var swiftUIColor: Color {
         switch self {
         case .none:     return .uvNone
@@ -47,6 +58,23 @@ extension UVRiskCategory {
         case .veryHigh: return .uvVeryHigh
         case .extreme:  return .uvExtreme
         }
+    }
+
+    /// Okabe-Ito colorblind-safe colour.
+    var colorBlindColor: Color {
+        switch self {
+        case .none:     return .cbNone
+        case .low:      return .cbLow
+        case .moderate: return .cbModerate
+        case .high:     return .cbHigh
+        case .veryHigh: return .cbVeryHigh
+        case .extreme:  return .cbExtreme
+        }
+    }
+
+    /// Returns the appropriate colour based on accessibility setting.
+    func adaptiveColor(colorBlind: Bool) -> Color {
+        colorBlind ? colorBlindColor : swiftUIColor
     }
 
     var gradient: LinearGradient {
@@ -144,6 +172,12 @@ struct AppBackground: View {
     var timeOfDay: TimeOfDay = .afternoon
     /// Decimal hour 0–23.999 for precise celestial positioning
     var decimalHour: Double = 12
+    var cloudCondition: CloudCondition = .clear
+    /// AQI 0–300 — drives smog layer density
+    var aqiPollution: Double = 0
+
+    /// Normalised pollution 0…1 (clamps at AQI 300)
+    private var smogT: Double { (aqiPollution / 300.0).clamped(to: 0...1) }
 
     var body: some View {
         ZStack {
@@ -156,15 +190,56 @@ struct AppBackground: View {
 
             // ── 2. Sun & Moon arc ───────────────────────────────────────
             SkyBodyView(decimalHour: decimalHour)
+                .opacity(cloudCondition == .overcast ? 0 : 1)
+                .animation(.easeInOut(duration: 1.2), value: cloudCondition == .overcast)
 
-            // ── 3. UV risk tinted overlay (screen blend) ────────────────
+            // ── 3. Cloud layer ──────────────────────────────────────────
+            CloudLayer(condition: cloudCondition)
+
+            // ── 4. Overcast grey veil ───────────────────────────────────
+            if cloudCondition == .overcast {
+                Color(hex: "#7A8490").opacity(0.38)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+
+            // ── 4c. Partly cloudy dim veil ──────────────────────────────
+            if cloudCondition == .partlyCloudy {
+                Color.black.opacity(0.12)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+
+            // ── 4b. Rain ───────────────────────────────────────────────
+            if cloudCondition == .overcast {
+                RainLayer()
+                    .transition(.opacity)
+            }
+
+            // ── 5. Smog / smoke layer ───────────────────────────────────
+            if aqiPollution > 10 {
+                SmogLayer(smogT: smogT)
+            }
+
+            // ── 6. Sepia pollution tint ─────────────────────────────────
+            // Warm ochre haze that thickens with AQI
+            if smogT > 0 {
+                Color(hex: "#8B6914").opacity(smogT * 0.32)
+                    .ignoresSafeArea()
+                    .blendMode(.multiply)
+                    .transition(.opacity)
+            }
+
+            // ── 7. UV risk tinted overlay (screen blend) ────────────────
             riskCategory.gradient
-                .opacity(0.18)
+                .opacity(cloudCondition == .overcast ? 0.07 : 0.18)
                 .blendMode(.screen)
         }
         .ignoresSafeArea()
         .animation(.easeInOut(duration: 1.4), value: timeOfDay)
         .animation(.easeInOut(duration: 0.8), value: riskCategory.rawValue)
+        .animation(.easeInOut(duration: 1.2), value: cloudCondition.rawValue)
+        .animation(.easeInOut(duration: 0.6), value: smogT)
     }
 }
 
@@ -280,7 +355,7 @@ private struct MoonCircle: View {
                     )
                 )
                 .frame(width: 120, height: 120)
-            // Moon disc
+            // Full moon disc
             Circle()
                 .fill(
                     RadialGradient(
@@ -289,11 +364,282 @@ private struct MoonCircle: View {
                     )
                 )
                 .frame(width: 44, height: 44)
-            // Crescent shadow
-            Circle()
-                .fill(Color(hex: "#050520").opacity(0.82))
-                .frame(width: 38, height: 38)
-                .offset(x: 12, y: -8)
+        }
+    }
+}
+
+// MARK: - Cloud Layer
+
+/// Clouds sit in the top 26% of the screen — right over the sun/moon arc.
+/// Clear = none. Partly cloudy = 3 white translucent puffs. Overcast = 5 dark dense puffs.
+struct CloudLayer: View {
+    let condition: CloudCondition
+
+    // (xFrac, yFrac, widthFrac, seed)  — all y inside top 26%
+    private let cloudDefs: [(x: CGFloat, y: CGFloat, w: CGFloat, seed: Double)] = [
+        (0.22, 0.07, 0.54, 0.0),   // left-centre
+        (0.75, 0.06, 0.48, 1.2),   // right
+        (0.50, 0.17, 0.58, 2.4),   // centre, slightly lower
+        (0.08, 0.10, 0.42, 0.6),   // far left
+        (0.88, 0.13, 0.40, 1.8),   // far right
+    ]
+
+    private var visibleCount: Int {
+        switch condition {
+        case .clear:        return 0
+        case .partlyCloudy: return 0   // no cloud shapes — just dim veil
+        case .overcast:     return cloudDefs.count
+        }
+    }
+
+    private var opacity: Double {
+        switch condition {
+        case .clear:        return 0
+        case .partlyCloudy: return 0.72   // white, clearly visible but sun glows through
+        case .overcast:     return 0.90   // heavy, dark
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                ForEach(0..<visibleCount, id: \.self) { i in
+                    let def = cloudDefs[i]
+                    let puffW = geo.size.width * def.w
+                    CloudPuff(seed: def.seed, condition: condition)
+                        .frame(width: puffW, height: puffW * 0.42)
+                        .position(
+                            x: geo.size.width  * def.x,
+                            y: geo.size.height * def.y
+                        )
+                        .opacity(opacity)
+                }
+            }
+        }
+        .ignoresSafeArea()
+        .animation(.easeInOut(duration: 1.4), value: condition.rawValue)
+    }
+}
+
+/// A realistic cloud built from a base capsule + 3 dome circles, with a single whole-cloud blur.
+private struct CloudPuff: View {
+    let seed: Double
+    let condition: CloudCondition
+    @State private var drift: CGFloat = 0
+
+    private var baseColor: Color {
+        condition == .overcast ? Color(hex: "#2C2C36") : Color.white
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+
+            ZStack {
+                // Flat base — anchors the cloud to a horizon line
+                Capsule()
+                    .fill(baseColor)
+                    .frame(width: w * 0.88, height: h * 0.40)
+                    .position(x: w * 0.50, y: h * 0.72)
+
+                // Left dome (small)
+                Circle()
+                    .fill(baseColor)
+                    .frame(width: h * 0.80)
+                    .position(x: w * 0.24, y: h * 0.48)
+
+                // Centre dome (tallest)
+                Circle()
+                    .fill(baseColor)
+                    .frame(width: h * 1.05)
+                    .position(x: w * 0.50, y: h * 0.36)
+
+                // Right dome (medium)
+                Circle()
+                    .fill(baseColor)
+                    .frame(width: h * 0.75)
+                    .position(x: w * 0.76, y: h * 0.50)
+            }
+            // Single, gentle blur on the whole cloud for soft edges
+            .blur(radius: condition == .partlyCloudy ? 4 : 7)
+            .shadow(color: baseColor.opacity(condition == .partlyCloudy ? 0.15 : 0.40),
+                    radius: 12, y: 6)
+        }
+        .offset(x: drift)
+        .onAppear {
+            let duration = 22.0 + seed * 7.0
+            let distance = CGFloat(5 + seed * 5)
+            withAnimation(.easeInOut(duration: duration).repeatForever(autoreverses: true)) {
+                drift = distance
+            }
+        }
+    }
+}
+
+// MARK: - Rain Layer
+
+/// Animated falling rain streaks visible only when overcast.
+struct RainLayer: View {
+    // Pre-computed drop definitions so init is lightweight
+    private struct Drop {
+        let x: CGFloat
+        let duration: Double
+        let delay: Double
+        let opacity: Double
+        let length: CGFloat
+    }
+
+    private let drops: [Drop] = {
+        (0..<30).map { i in
+            let f = Double(i)
+            return Drop(
+                x:        CGFloat((f * 7.91 + 3.3).truncatingRemainder(dividingBy: 100)) / 100,
+                duration: 0.75 + (f * 0.11).truncatingRemainder(dividingBy: 0.55),
+                delay:    (f * 0.17).truncatingRemainder(dividingBy: 1.8),
+                opacity:  0.18 + (f * 0.047).truncatingRemainder(dividingBy: 0.28),
+                length:   12 + CGFloat((f * 3.3).truncatingRemainder(dividingBy: 18))
+            )
+        }
+    }()
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                ForEach(0..<drops.count, id: \.self) { i in
+                    RainDrop(
+                        xFrac:    drops[i].x,
+                        duration: drops[i].duration,
+                        delay:    drops[i].delay,
+                        opacity:  drops[i].opacity,
+                        length:   drops[i].length,
+                        screenH:  geo.size.height,
+                        screenW:  geo.size.width
+                    )
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private struct RainDrop: View {
+    let xFrac:   CGFloat
+    let duration: Double
+    let delay:   Double
+    let opacity: Double
+    let length:  CGFloat
+    let screenH: CGFloat
+    let screenW: CGFloat
+    @State private var falling = false
+
+    var body: some View {
+        Capsule()
+            .fill(Color.white.opacity(opacity))
+            .frame(width: 1.2, height: length)
+            .rotationEffect(.degrees(12))     // slight diagonal slant
+            .offset(
+                x: screenW * xFrac,
+                y: falling ? screenH + length : -length
+            )
+            .animation(
+                .linear(duration: duration)
+                .delay(delay)
+                .repeatForever(autoreverses: false),
+                value: falling
+            )
+            .onAppear { falling = true }
+    }
+}
+// MARK: - Smog Layer
+
+/// Drifting brownish-grey haze blobs that scale in count and opacity with AQI.
+/// smogT is a normalised value 0…1 (AQI 0 → 300).
+struct SmogLayer: View {
+    let smogT: Double   // 0 = clean air, 1 = AQI 300
+
+    // Smog blob descriptors: (xFrac, yFrac, widthFrac, baseSeed)
+    private let blobDefs: [(x: CGFloat, y: CGFloat, w: CGFloat, seed: Double)] = [
+        (0.10, 0.55, 0.70, 0.0),
+        (0.60, 0.65, 0.65, 0.5),
+        (0.35, 0.72, 0.80, 1.0),
+        (0.80, 0.58, 0.55, 1.5),
+        (0.20, 0.80, 0.60, 2.0),
+        (0.55, 0.88, 0.75, 2.5),
+        (0.05, 0.68, 0.50, 3.0),
+        (0.75, 0.78, 0.58, 3.5),
+    ]
+
+    /// How many blobs are visible — scales linearly with smogT
+    private var visibleCount: Int {
+        Int((smogT * Double(blobDefs.count)).rounded())
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                ForEach(0..<visibleCount, id: \.self) { i in
+                    let def = blobDefs[i]
+                    // Each successive blob is slightly more opaque as AQI climbs
+                    let blobOpacity = 0.18 + smogT * 0.42
+                    SmogBlob(seed: def.seed)
+                        .frame(width: geo.size.width * def.w,
+                               height: geo.size.width * def.w * 0.30)
+                        .position(
+                            x: geo.size.width  * def.x,
+                            y: geo.size.height * def.y
+                        )
+                        .opacity(blobOpacity)
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// A single smog blob — soft brownish-grey blurred ellipses that slowly swirl.
+private struct SmogBlob: View {
+    let seed: Double
+    @State private var offsetX: CGFloat = 0
+    @State private var offsetY: CGFloat = 0
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ZStack {
+                // Main smog mass — warm brownish grey
+                Ellipse()
+                    .fill(Color(hex: "#A08858"))
+                    .frame(width: w, height: h * 0.55)
+                    .blur(radius: h * 0.45)
+                    .position(x: w * 0.5, y: h * 0.5)
+                // Secondary darker swirl
+                Ellipse()
+                    .fill(Color(hex: "#6B5E3A").opacity(0.70))
+                    .frame(width: w * 0.65, height: h * 0.65)
+                    .blur(radius: h * 0.35)
+                    .position(x: w * 0.38, y: h * 0.55)
+                // Greyer wisp on right
+                Ellipse()
+                    .fill(Color(hex: "#8E8E8E").opacity(0.50))
+                    .frame(width: w * 0.55, height: h * 0.50)
+                    .blur(radius: h * 0.30)
+                    .position(x: w * 0.68, y: h * 0.48)
+            }
+        }
+        .offset(x: offsetX, y: offsetY)
+        .onAppear {
+            let dur = 22.0 + seed * 5.0
+            let dx  = CGFloat(6  + seed * 5)
+            let dy  = CGFloat(-3 - seed * 2)
+            withAnimation(
+                .easeInOut(duration: dur)
+                .repeatForever(autoreverses: true)
+            ) {
+                offsetX = dx
+                offsetY = dy
+            }
         }
     }
 }
@@ -401,9 +747,17 @@ struct LabeledSlider: View {
 struct UVGaugeRing: View {
     let uvIndex: Double
     let riskColor: Color
+    var colorBlind: Bool = false
     @State private var animatedProgress: Double = 0
 
     private let maxUVI: Double = 16
+
+    /// Arc gradient colours — swapped for colorblind mode
+    private var arcColors: [Color] {
+        colorBlind
+            ? [.cbLow, .cbModerate, .cbHigh, .cbVeryHigh, .cbExtreme, riskColor]
+            : [.uvLow, .uvModerate, .uvHigh, .uvVeryHigh, .uvExtreme, riskColor]
+    }
 
     var body: some View {
         ZStack {
@@ -418,7 +772,7 @@ struct UVGaugeRing: View {
                 .trim(from: 0.1, to: 0.1 + 0.8 * animatedProgress)
                 .stroke(
                     AngularGradient(
-                        colors: [.uvLow, .uvModerate, .uvHigh, .uvVeryHigh, .uvExtreme, riskColor],
+                        colors: arcColors,
                         center: .center,
                         startAngle: .degrees(108),
                         endAngle: .degrees(432)

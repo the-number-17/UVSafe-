@@ -2,7 +2,7 @@ import Foundation
 import CoreLocation
 import Combine
 
-/// Wraps CoreLocation to provide real-time latitude, longitude, and altitude.
+/// Wraps CoreLocation to provide real-time latitude and longitude.
 /// Publishes updates via @Published properties so the ViewModel can observe them.
 @MainActor
 final class LocationManager: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
@@ -10,7 +10,7 @@ final class LocationManager: NSObject, ObservableObject, @preconcurrency CLLocat
     // MARK: Published State
     @Published var latitude: Double  = 0.0
     @Published var longitude: Double = 0.0
-    @Published var altitude: Double  = 0.0   // metres above sea level
+
     @Published var locationStatus: CLAuthorizationStatus = .notDetermined
     @Published var locationError: String?
     @Published var hasLocation: Bool = false
@@ -67,10 +67,6 @@ final class LocationManager: NSObject, ObservableObject, @preconcurrency CLLocat
         Task { @MainActor in
             latitude  = loc.coordinate.latitude
             longitude = loc.coordinate.longitude
-            // Altitude from GPS (metres above WGS-84 ellipsoid, good enough for UV model)
-            if loc.verticalAccuracy >= 0 {
-                altitude = max(loc.altitude, 0)
-            }
             hasLocation = true
             locationError = nil
         }

@@ -10,7 +10,9 @@ struct ContentView: View {
             AppBackground(
                 riskCategory: vm.uvResult?.riskCategory ?? .none,
                 timeOfDay: vm.timeOfDay,
-                decimalHour: vm.decimalHour
+                decimalHour: vm.decimalHour,
+                cloudCondition: vm.cloudCondition,
+                aqiPollution: vm.aqiPollution
             )
 
             VStack(spacing: 0) {
@@ -61,6 +63,7 @@ struct ContentView: View {
 
 private struct HeaderBar: View {
     @ObservedObject var vm: UVViewModel
+    @EnvironmentObject var settings: AccessibilitySettings
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -92,7 +95,6 @@ private struct HeaderBar: View {
                 Text("UVSafe")
                     .font(.system(size: 24, weight: .black, design: .rounded))
                     .foregroundStyle(.white)
-                // Time-of-day badge inline under the title
                 HStack(spacing: 4) {
                     Image(systemName: vm.timeOfDay.icon)
                         .font(.system(size: 10))
@@ -106,8 +108,8 @@ private struct HeaderBar: View {
 
             Spacer()
 
-            // Live indicator
-            LiveIndicator(hasLocation: vm.locationManager.hasLocation)
+            // ── Colorblind mode toggle ──────────────────────────────────
+            ColorBlindToggle()
         }
         .padding(.horizontal, 20)
         .padding(.top, 16)
@@ -126,29 +128,47 @@ private struct HeaderBar: View {
     }
 }
 
-private struct LiveIndicator: View {
-    let hasLocation: Bool
-    @State private var pulse = false
+// MARK: - Colorblind Toggle Pill
+
+private struct ColorBlindToggle: View {
+    @EnvironmentObject var settings: AccessibilitySettings
 
     var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(hasLocation ? Color.uvLow : Color.uvModerate)
-                .frame(width: 7, height: 7)
-                .scaleEffect(pulse ? 1.3 : 1.0)
-                .shadow(color: (hasLocation ? Color.uvLow : Color.uvModerate).opacity(0.7), radius: pulse ? 5 : 2)
-                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
-                .onAppear { pulse = true }
-            Text(hasLocation ? "LIVE" : "WAITING")
-                .font(.system(size: 10, weight: .black))
-                .foregroundStyle(hasLocation ? Color.uvLow : Color.uvModerate)
-                .tracking(1.5)
+        Button {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
+                settings.colorBlindMode.toggle()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: settings.colorBlindMode ? "eye.fill" : "eye")
+                    .font(.system(size: 11, weight: .semibold))
+                Text(settings.colorBlindMode ? "CB ON" : "CB")
+                    .font(.system(size: 10, weight: .black))
+                    .tracking(1)
+            }
+            .foregroundStyle(settings.colorBlindMode ? Color(hex: "#56B4E9") : Color.white.opacity(0.6))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                settings.colorBlindMode
+                    ? Color(hex: "#56B4E9").opacity(0.20)
+                    : Color.white.opacity(0.08),
+                in: Capsule()
+            )
+            .overlay(
+                Capsule().stroke(
+                    settings.colorBlindMode ? Color(hex: "#56B4E9").opacity(0.5) : Color.clear,
+                    lineWidth: 1
+                )
+            )
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.ultraThinMaterial, in: Capsule())
+        .buttonStyle(.plain)
+        .accessibilityLabel(settings.colorBlindMode ? "Colorblind mode on" : "Colorblind mode off")
+        .accessibilityHint("Toggles colorblind-safe colour palette")
     }
 }
+
+
 
 // MARK: - Location Banners
 
